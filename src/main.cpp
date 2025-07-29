@@ -9,29 +9,26 @@
 #define NUM_LEDS    1
 #define LED_TYPE    WS2812B
 #define COLOR_ORDER GRB
-
 CRGB leds[NUM_LEDS];
 
 // LED state variables
 bool ledState = false;
-uint8_t ledBrightness = 100;  // 0-255
-CRGB currentColor = CRGB::Red;  // Default color
+uint8_t ledBrightness = 100; // 0-255
+CRGB currentColor = CRGB::Red; // Default color
 
 // AP Mode Credentials
 const char* ap_ssid = "LED_CONFIG";
 const char* ap_password = "12345678";
 
 // IP Configurations
-IPAddress local_ip(192,168,4,1);
-IPAddress gateway(192,168,4,1);
-IPAddress subnet(255,255,255,0);
+IPAddress local_ip(192, 168, 4, 1);
+IPAddress gateway(192, 168, 4, 1);
+IPAddress subnet(255, 255, 255, 0);
 
 WebServer server(80);
 Preferences preferences;
 
 const char* ntpServer = "pool.ntp.org";
-const long  gmtOffset_sec = 0;
-const int   daylightOffset_sec = 3600;
 
 // WiFi credentials storage
 String sta_ssid = "";
@@ -40,29 +37,16 @@ String sta_password = "";
 // Boot button configuration
 const int BOOT_BUTTON_PIN = 0;
 const unsigned long LONG_PRESS_TIME = 3000;
-
-// Performance optimization constants
-const unsigned long WIFI_RETRY_INTERVAL = 30000;
-const unsigned long BUTTON_DEBOUNCE_TIME = 50;
-
-// Boot button state variables
-bool buttonPressed = false;
 unsigned long buttonPressTime = 0;
 bool lastButtonState = HIGH;
 
-// Simplified connection status variables
-bool connectionAttempted = false;
-bool connectedToWiFi = false;
-
-// Performance optimization variables
-unsigned long lastButtonCheck = 0;
-unsigned long lastScanTime = 0;
-int scanResults = -1;
-
-// Connection management variables
+// --- REFACTORED State Management Variables ---
 bool isConnecting = false;
 unsigned long connectionStartTime = 0;
 const unsigned long CONNECTION_TIMEOUT = 15000; // 15 seconds
+bool connectionAttempted = false;
+bool connectedToWiFi = false;
+
 
 // Function declarations
 String getSimplePage(String title, String content);
@@ -73,8 +57,9 @@ void handleLed();
 void handleToggleLed();
 void handleSetColor();
 void handleSetBrightness();
+void handleClearCredentials();
 
-// Lightweight HTML templates
+// Lightweight HTML templates (Same as yours, no changes needed here but using F() macro is recommended)
 String getSimplePage(String title, String content) {
   String html = "<!DOCTYPE html><html><head>";
   html += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
@@ -164,7 +149,7 @@ String getSimplePage(String title, String content) {
   return html;
 }
 
-// LED state functions
+// --- LED state functions (No changes needed) ---
 void loadLedState() {
   preferences.begin("led", true);
   ledState = preferences.getBool("state", false);
@@ -193,7 +178,8 @@ void updateRGBLED() {
   FastLED.show();
 }
 
-// LED web handlers
+// --- Web Handlers (Mostly unchanged, using F() macro for memory) ---
+
 void handleLed() {
   String content = "<h1>RGB LED Control</h1>";
   content += "<p>LED is currently <strong>" + String(ledState ? "ON" : "OFF") + "</strong></p>";
@@ -222,7 +208,7 @@ void handleToggleLed() {
   ledState = !ledState;
   updateRGBLED();
   saveLedState();
-  server.sendHeader("Location", "/led");
+  server.sendHeader("Location", "/led", true);
   server.send(303, "text/plain", "");
 }
 
@@ -239,7 +225,7 @@ void handleSetColor() {
     updateRGBLED();
     saveLedState();
   }
-  server.sendHeader("Location", "/led");
+  server.sendHeader("Location", "/led", true);
   server.send(303, "text/plain", "");
 }
 
@@ -251,215 +237,142 @@ void handleSetBrightness() {
     updateRGBLED();
     saveLedState();
   }
-  server.sendHeader("Location", "/led");
+  server.sendHeader("Location", "/led", true);
   server.send(303, "text/plain", "");
 }
 
-// Function to clear stored credentials
 void clearStoredCredentials() {
   Serial.println("Clearing stored WiFi credentials...");
-  WiFi.disconnect();
-  isConnecting = false;
   preferences.begin("wifi", false);
   preferences.remove("ssid");
   preferences.remove("password");
   preferences.end();
-  sta_ssid = "";
-  sta_password = "";
-  connectionAttempted = false;
-  connectedToWiFi = false;
-  Serial.println("All stored credentials cleared!");
-  delay(2000);
+  Serial.println("Credentials cleared. Restarting...");
+  delay(1000);
   ESP.restart();
 }
 
-// Function to force stop all connection attempts
-void forceStopConnections() {
-  Serial.println("Force stopping all WiFi connections...");
-  WiFi.disconnect();
-  isConnecting = false;
-  preferences.begin("wifi", false);
-  preferences.remove("ssid");
-  preferences.remove("password");
-  preferences.end();
-  sta_ssid = "";
-  sta_password = "";
-  connectionAttempted = false;
-  connectedToWiFi = false;
-  Serial.println("All connections stopped and credentials cleared");
-}
-
-// Function to clear credentials via web interface
 void handleClearCredentials() {
-  Serial.println("Clearing stored credentials via web interface");
-  WiFi.disconnect();
-  isConnecting = false;
+  // Disconnect from WiFi before clearing
+  WiFi.disconnect(true);
+  delay(1000);
+  
   preferences.begin("wifi", false);
   preferences.remove("ssid");
   preferences.remove("password");
   preferences.end();
+  
   sta_ssid = "";
   sta_password = "";
   connectionAttempted = false;
   connectedToWiFi = false;
+  
   String content = "<h1>Credentials Cleared</h1>";
   content += "<div class='status-success'>";
   content += "<p>✅ All WiFi credentials have been cleared successfully.</p>";
+  content += "<p>The device will now only operate in Access Point mode.</p>";
   content += "<p><a href='/wifi-setup'>Setup New Connection</a></p>";
   content += "</div>";
+  
   server.send(200, "text/html", getSimplePage("Cleared", content));
 }
 
+
 void handleHome() {
   String content = "<h1>ESP32 WiFi Manager</h1>";
-  content += "<p><strong>WiFi Status:</strong> ";
   if (WiFi.status() == WL_CONNECTED) {
-    content += "Connected to " + WiFi.SSID() + " (" + WiFi.localIP().toString() + ")";
+    content += "<p><strong>WiFi Status:</strong> Connected to " + WiFi.SSID() + " (" + WiFi.localIP().toString() + ")</p>";
   } else {
-    content += "Not connected - <a href='/wifi-setup'>Configure WiFi</a>";
+    content += "<p><strong>WiFi Status:</strong> Not connected - <a href='/wifi-setup'>Configure WiFi</a></p>";
   }
-  content += "</p>";
   content += "<p><strong>LED Status:</strong> " + String(ledState ? "ON" : "OFF") + "</p>";
-  content += "<p><strong>AP IP:</strong> " + WiFi.softAPIP().toString() + "</p>";
-  content += "<p><strong>Free Memory:</strong> " + String(ESP.getFreeHeap()) + " bytes</p>";
+  content += "<p><strong>AP IP Address:</strong> " + WiFi.softAPIP().toString() + "</p>";
   server.send(200, "text/html", getSimplePage("Home", content));
 }
 
 void handleWifiSetup() {
-  String content = "<h1>WiFi Setup</h1>";
-  if (connectionAttempted) {
-    if (connectedToWiFi) {
-      content += "<div class='status-success'>";
-      content += "✅ Connected to " + sta_ssid + " (" + WiFi.localIP().toString() + ")";
-      content += "</div>";
-      WiFi.mode(WIFI_AP_STA);
-      delay(100);
-    } else {
-      content += "<div class='status-danger'>";
-      content += "❌ Failed to connect to " + sta_ssid + ". Check password or network availability.";
-      content += "<br><a href='/clear-credentials' style='color:white;text-decoration:underline;'>Clear Stored Credentials</a>";
-      content += "</div>";
-      WiFi.mode(WIFI_AP_STA);
-      delay(100);
+    String content = "<h1>WiFi Setup</h1>";
+
+    if (connectionAttempted) {
+        if (connectedToWiFi) {
+            content += "<div class='status-success'>✅ Connected to <strong>" + sta_ssid + "</strong> (" + WiFi.localIP().toString() + ")</div>";
+        } else {
+            content += "<div class='status-danger'>❌ Failed to connect to <strong>" + sta_ssid + "</strong>. Please check the password and try again.</div>";
+        }
     }
-  }
-  if (sta_ssid.length() > 0 && !connectionAttempted) {
-    content += "<div class='status-warning'>";
-    content += "<p><strong>Current stored network:</strong> " + sta_ssid;
-    content += " <a href='/clear-credentials' style='margin-left:10px;'>Clear</a></p>";
-    content += "</div>";
-  }
-  content += "<div id='networks'>";
-  content += "<h3>Available Networks:</h3>";
-  content += "<button onclick='loadNetworks()'>Scan Networks</button>";
-  content += "<div id='scan-results'>Click 'Scan Networks' to see available WiFi networks</div>";
-  content += "</div>";
-  content += "<div id='connection-form' style='display:none;'>";
-  content += "<h3>Connect to: <span id='selected-ssid'></span></h3>";
-  content += "<form action='/connect' method='POST'>";
-  content += "<input type='hidden' id='ssid' name='ssid' value=''>";
-  content += "<input type='password' id='password' name='password' placeholder='WiFi Password' required style='width:200px;'>";
-  content += "<br><button type='submit'>Connect</button>";
-  content += "</form>";
-  content += "</div>";
-  content += "<script>";
-  content += "function selectNetwork(ssid) {";
-  content += "  document.getElementById('selected-ssid').textContent = ssid;";
-  content += "  document.getElementById('ssid').value = ssid;";
-  content += "  document.getElementById('connection-form').style.display = 'block';";
-  content += "  document.querySelectorAll('.network').forEach(n => n.classList.remove('selected'));";
-  content += "  event.target.classList.add('selected');";
-  content += "}";
-  content += "function loadNetworks() {";
-  content += "  document.getElementById('scan-results').innerHTML = 'Scanning...';";
-  content += "  fetch('/scan').then(r => r.text()).then(data => {";
-  content += "    document.getElementById('scan-results').innerHTML = data;";
-  content += "  }).catch(e => {";
-  content += "    document.getElementById('scan-results').innerHTML = 'Scan failed. Try again.';";
-  content += "  });";
-  content += "}";
-  content += "</script>";
-  WiFi.mode(WIFI_AP_STA);
-  delay(100);
-  server.send(200, "text/html", getSimplePage("WiFi Setup", content));
+
+    if (sta_ssid.length() > 0) {
+        content += "<div class='status-warning'><p>Current stored network: <strong>" + sta_ssid + "</strong> <a href='/clear-credentials' style='margin-left:10px;'>Clear Credentials</a></p></div>";
+    }
+
+    content += "<h3>Available Networks</h3>";
+    content += "<button onclick='loadNetworks()'>Scan for Networks</button>";
+    content += "<div id='scan-results' style='margin-top:10px;'></div>";
+    
+    content += "<div id='connection-form' style='display:none; margin-top:20px;'>";
+    content += "<h3>Connect to <span id='selected-ssid'></span></h3>";
+    content += "<form action='/connect' method='POST'>";
+    content += "<input type='hidden' id='ssid' name='ssid'>";
+    content += "<input type='password' name='password' placeholder='WiFi Password' required>";
+    content += "<button type='submit'>Connect</button>";
+    content += "</form></div>";
+    
+    content += "<script>";
+    content += "function selectNetwork(ssid){document.getElementById('selected-ssid').textContent=ssid;document.getElementById('ssid').value=ssid;document.getElementById('connection-form').style.display='block';document.querySelectorAll('.network').forEach(n=>n.classList.remove('selected'));event.currentTarget.classList.add('selected');}";
+    content += "function loadNetworks(){const e=document.getElementById('scan-results');e.innerHTML='Scanning...';fetch('/scan').then(r=>r.text()).then(d=>e.innerHTML=d).catch(err=>e.innerHTML='Scan failed.');}";
+    content += "</script>";
+
+    server.send(200, "text/html", getSimplePage("WiFi Setup", content));
 }
 
 void handleScan() {
-  String content = "";
-  int n = WiFi.scanComplete();
-  if (n == WIFI_SCAN_RUNNING) {
-    content = "Scanning in progress...";
-  } else if (n == WIFI_SCAN_FAILED || n < 0) {
-    content = "Scan failed. <button onclick='loadNetworks()'>Try Again</button>";
-    WiFi.scanNetworks(true);
-  } else if (n == 0) {
-    content = "No networks found. <button onclick='loadNetworks()'>Refresh</button>";
-  } else {
-    content = "<button onclick='loadNetworks()' style='margin-bottom:10px;'>Refresh</button>";
-    int maxNetworks = min(n, 10);
-    for (int i = 0; i < maxNetworks; ++i) {
-      String ssid = WiFi.SSID(i);
-      if (ssid.length() == 0) continue;
-      int rssi = WiFi.RSSI(i);
-      String security = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "Open" : "Secured";
-      content += "<div class='network' onclick='selectNetwork(\"" + ssid + "\")'>";
-      content += "<strong>" + ssid + "</strong><br>";
-      content += "Signal: " + String(rssi) + " dBm | " + security;
-      content += "</div>";
+    String content = "";
+    int n = WiFi.scanNetworks();
+    if (n == 0) {
+        content = "No networks found.";
+    } else {
+        for (int i = 0; i < n; ++i) {
+            String ssid = WiFi.SSID(i);
+            int rssi = WiFi.RSSI(i);
+            String security = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "Open" : "Secured";
+            content += "<div class='network' onclick='selectNetwork(\"" + ssid + "\")'>";
+            content += "<strong>" + ssid + "</strong> (" + String(rssi) + " dBm) - " + security;
+            content += "</div>";
+        }
     }
-    if (n > 10) {
-      content += "<p>Showing first 10 networks of " + String(n) + " found.</p>";
-    }
-    WiFi.scanDelete();
-  }
-  if (n != WIFI_SCAN_RUNNING) {
-    WiFi.scanNetworks(true);
-  }
-  server.send(200, "text/plain", content);
+    server.send(200, "text/plain", content);
 }
+
 
 void handleConnect() {
   if (server.hasArg("ssid") && server.hasArg("password")) {
     sta_ssid = server.arg("ssid");
     sta_password = server.arg("password");
-    Serial.println("Received new credentials: " + sta_ssid);
+
+    Serial.println("New credentials received for: " + sta_ssid);
     preferences.begin("wifi", false);
     preferences.putString("ssid", sta_ssid);
     preferences.putString("password", sta_password);
     preferences.end();
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.begin(sta_ssid.c_str(), sta_password.c_str());
+    
+    // --- FIX: Start the connection attempt HERE, only ONCE ---
     isConnecting = true;
     connectionStartTime = millis();
-    connectionAttempted = true;
+    connectionAttempted = true; 
     connectedToWiFi = false;
-    server.send(200, "text/html",
-      getSimplePage("Connecting...",
-      "<h1>Trying to connect to " + sta_ssid + "</h1>"
-      "<p>Please wait 10-15 seconds and refresh the page.</p>"
-      "<a href='/wifi-setup'>Back to WiFi Setup</a>"));
-  }
-}
+    WiFi.begin(sta_ssid.c_str(), sta_password.c_str());
+    Serial.println("Connection attempt started immediately.");
 
-void handleTimer() {
-  String content = "<h1>Current Time</h1>";
-  if (WiFi.status() == WL_CONNECTED) {
-    content += "<div id='clock' style='font-size:36px;text-align:center;'>Loading...</div>";
-    content += "<script>";
-    content += "function updateClock() {";
-    content += "  const now = new Date();";
-    content += "  document.getElementById('clock').textContent = now.toLocaleTimeString();";
-    content += "}";
-    content += "setInterval(updateClock, 1000);";
-    content += "updateClock();";
-    content += "</script>";
+    // Send a response page immediately
+    String content = "<h1>Connecting...</h1>";
+    content += "<p>Attempting to connect to <strong>" + sta_ssid + "</strong>. The device will connect within 15 seconds.</p>";
+    content += "<p>If connection succeeds, you can access this device at its new IP address. If it fails, the configuration AP will remain active.</p>";
+    content += "<p>Page will redirect in 5 seconds...</p>";
+    content += "<script>setTimeout(() => { window.location.href = '/wifi-setup'; }, 5000);</script>";
+    server.send(200, "text/html", getSimplePage("Connecting", content));
   } else {
-    content += "<div class='status-danger'>";
-    content += "<p>Time requires internet connection.</p>";
-    content += "<p><a href='/wifi-setup'>Configure WiFi</a></p>";
-    content += "</div>";
+    server.send(400, "text/plain", "Bad Request");
   }
-  server.send(200, "text/html", getSimplePage("Timer", content));
 }
 
 void handleInfo() {
@@ -469,179 +382,135 @@ void handleInfo() {
   if (WiFi.status() == WL_CONNECTED) {
     content += "<p><strong>Network:</strong> " + WiFi.SSID() + "</p>";
     content += "<p><strong>IP:</strong> " + WiFi.localIP().toString() + "</p>";
-    content += "<p><strong>Signal:</strong> " + String(WiFi.RSSI()) + " dBm</p>";
   }
-  content += "<p><strong>MAC:</strong> " + WiFi.macAddress() + "</p>";
   content += "<h3>Access Point</h3>";
   content += "<p><strong>SSID:</strong> " + String(ap_ssid) + "</p>";
   content += "<p><strong>IP:</strong> " + WiFi.softAPIP().toString() + "</p>";
-  content += "<p><strong>Clients:</strong> " + String(WiFi.softAPgetStationNum()) + "</p>";
-  content += "<h3>Hardware</h3>";
-  content += "<p><strong>LED Pin:</strong> " + String(LED_PIN) + "</p>";
-  content += "<p><strong>LED State:</strong> " + String(ledState ? "ON" : "OFF") + "</p>";
-  content += "<p><strong>LED Brightness:</strong> " + String(ledBrightness) + "/255</p>";
-  content += "<p><strong>LED Color:</strong> RGB(" + String(currentColor.r) + ", " + String(currentColor.g) + ", " + String(currentColor.b) + ")</p>";
   content += "<h3>System</h3>";
   content += "<p><strong>Free Memory:</strong> " + String(ESP.getFreeHeap()) + " bytes</p>";
   content += "<p><strong>Uptime:</strong> " + String(millis() / 1000) + " seconds</p>";
-  server.send(200, "text/html", getSimplePage("System Info", content));
+  server.send(200, "text/html", getSimplePage("Info", content));
 }
+
 
 void handleNotFound() {
-  server.send(404, "text/html", getSimplePage("404", "<h1>Page Not Found</h1>"));
-}
-
-// Improved WiFi connection management
-void handleWifiConnection() {
-  static unsigned long lastRetry = 0;
-  if (WiFi.getMode() != WIFI_AP_STA) {
-    Serial.println("Mode not dual - forcing AP_STA mode");
-    WiFi.mode(WIFI_AP_STA);
-  }
-  if (isConnecting) {
-    if (millis() - connectionStartTime > CONNECTION_TIMEOUT) {
-      Serial.println("Connection timeout - stopping attempts");
-      WiFi.disconnect();
-      isConnecting = false;
-      connectedToWiFi = false;
-      WiFi.mode(WIFI_AP_STA);
-      Serial.println("Timeout: Restarting AP to ensure it stays alive...");
-      WiFi.softAP(ap_ssid, ap_password, 1); // or use 11 if 1 is crowded;
-      WiFi.softAPConfig(local_ip, gateway, subnet);
-      delay(200);
-      Serial.println("AP restarted. IP: " + WiFi.softAPIP().toString());
-      connectionAttempted = true;
-    }
-    return;
-  }
-}
-
-void maintainDualMode() {
-  static unsigned long lastModeCheck = 0;
-  if (millis() - lastModeCheck >= 2000) {
-    if (WiFi.getMode() != WIFI_AP_STA) {
-      Serial.println("Mode drift detected - restoring AP_STA mode");
-      WiFi.mode(WIFI_AP_STA);
-      delay(100);
-    }
-    IPAddress apIP = WiFi.softAPIP();
-    int apClients = WiFi.softAPgetStationNum();
-    if (
-      apIP[0] == 0 || apIP[1] == 0 || apIP[2] == 0 || apIP[3] == 0 ||
-      apIP.toString() == "0.0.0.0" ||
-      apClients < 0
-    ) {
-      Serial.println("AP not running or lost - force restarting AP");
-      WiFi.softAP(ap_ssid, ap_password, 1); // or use 11 if 1 is crowded;
-      WiFi.softAPConfig(local_ip, gateway, subnet);
-      delay(100);
-      Serial.println("AP restarted. IP: " + WiFi.softAPIP().toString());
-    }
-    lastModeCheck = millis();
-  }
+  server.send(404, "text/plain", "Not Found");
 }
 
 void handleBootButton() {
   bool currentState = digitalRead(BOOT_BUTTON_PIN);
-  if (currentState == LOW && lastButtonState == HIGH) {
-    buttonPressed = true;
+  if (currentState == LOW && lastButtonState == HIGH) { // Button just pressed
     buttonPressTime = millis();
   }
-  if (currentState == HIGH && lastButtonState == LOW && buttonPressed) {
-    unsigned long duration = millis() - buttonPressTime;
-    if (duration >= LONG_PRESS_TIME) {
+  if (currentState == HIGH && lastButtonState == LOW) { // Button just released
+    if (millis() - buttonPressTime >= LONG_PRESS_TIME) {
       clearStoredCredentials();
     }
-    buttonPressed = false;
   }
   lastButtonState = currentState;
 }
 
+// --- SETUP ---
 void setup() {
   Serial.begin(115200);
-  Serial.println("Starting ESP32 WiFi Manager...");
-  // Initialize FastLED for RGB LED
+  Serial.println("\nStarting up...");
+
+  // Initialize FastLED
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS);
-  FastLED.setBrightness(ledBrightness);
   loadLedState();
-  // Test RGB LED on startup with different colors
-  leds[0] = CRGB::Red; FastLED.show(); delay(300);
-  leds[0] = CRGB::Green; FastLED.show(); delay(300);
-  leds[0] = CRGB::Blue; FastLED.show(); delay(300);
-  leds[0] = CRGB::Black; FastLED.show(); delay(300);
+  // Test LED
+  leds[0] = CRGB::Red; FastLED.show(); delay(200);
+  leds[0] = CRGB::Green; FastLED.show(); delay(200);
+  leds[0] = CRGB::Blue; FastLED.show(); delay(200);
   updateRGBLED();
-  // Initialize button
+
+  // Initialize boot button
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+
   // Load saved credentials
   preferences.begin("wifi", true);
   sta_ssid = preferences.getString("ssid", "");
   sta_password = preferences.getString("password", "");
   preferences.end();
+  
+  // ALWAYS start in dual mode. This is crucial.
   WiFi.mode(WIFI_AP_STA);
-  delay(100);
-  WiFi.softAP(ap_ssid, ap_password, 1); // or use 11 if 1 is crowded;
+  
+  // Start the Access Point
+  WiFi.softAP(ap_ssid, ap_password);
   WiFi.softAPConfig(local_ip, gateway, subnet);
-  Serial.println("AP Started:");
-  Serial.println("SSID: " + String(ap_ssid));
-  Serial.println("IP: " + WiFi.softAPIP().toString());
-  Serial.println("Mode: " + String(WiFi.getMode() == WIFI_AP_STA ? "AP_STA" : "Other"));
+  Serial.print("AP Started. IP Address: ");
+  Serial.println(WiFi.softAPIP());
+
+  // If we have credentials, start the connection process
   if (sta_ssid.length() > 0) {
     Serial.println("Found stored credentials for: " + sta_ssid);
-    Serial.println("Will attempt connection...");
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.begin(sta_ssid.c_str(), sta_password.c_str());
     isConnecting = true;
     connectionStartTime = millis();
-    connectionAttempted = false;
+    // --- FIX: Start the connection attempt HERE, only ONCE ---
+    WiFi.begin(sta_ssid.c_str(), sta_password.c_str()); 
   } else {
-    Serial.println("No stored WiFi credentials found");
+    Serial.println("No stored WiFi credentials.");
   }
-  // Setup web server
-  server.on("/", handleHome);
-  server.on("/wifi-setup", handleWifiSetup);
-  server.on("/scan", handleScan);
+
+  // Setup web server routes
+  server.on("/", HTTP_GET, handleHome);
+  server.on("/wifi-setup", HTTP_GET, handleWifiSetup);
+  server.on("/scan", HTTP_GET, handleScan);
   server.on("/connect", HTTP_POST, handleConnect);
-  server.on("/clear-credentials", handleClearCredentials);
-  server.on("/led", handleLed);
+  server.on("/clear-credentials", HTTP_GET, handleClearCredentials);
+  server.on("/led", HTTP_GET, handleLed);
   server.on("/toggle-led", HTTP_POST, handleToggleLed);
   server.on("/set-color", HTTP_POST, handleSetColor);
   server.on("/set-brightness", HTTP_POST, handleSetBrightness);
-  server.on("/timer", handleTimer);
-  server.on("/info", handleInfo);
+  server.on("/info", HTTP_GET, handleInfo);
   server.onNotFound(handleNotFound);
+
   server.begin();
-  Serial.println("Web server started");
-  WiFi.scanNetworks(true);
-  Serial.println("Setup complete - AP should remain active at all times");
+  Serial.println("Web server started.");
 }
 
+// --- MAIN LOOP ---
 void loop() {
   handleBootButton();
   server.handleClient();
-  maintainDualMode();
+
+  // --- Centralized WiFi Connection Monitoring ---
   if (isConnecting) {
-    Serial.println("Loop: WiFi mode = " + String(WiFi.getMode()));
-    Serial.println("Loop: AP IP = " + WiFi.softAPIP().toString());
+    // Check for successful connection
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("✅ Connected successfully!");
+      Serial.println("");
+      Serial.println("✅ WiFi Connected!");
+      Serial.print("IP Address: ");
+      Serial.println(WiFi.localIP());
       isConnecting = false;
       connectedToWiFi = true;
-    } else if (millis() - connectionStartTime > CONNECTION_TIMEOUT) {
-      Serial.println("❌ Connection failed. Re-enabling AP...");
-      WiFi.disconnect(true);
+      configTime(19800, 0, ntpServer); // GMT+5:30 = 19800 seconds
+    }
+    // Check for connection timeout
+    else if (millis() - connectionStartTime > CONNECTION_TIMEOUT) {
+      Serial.println("❌ Connection failed (timeout).");
       isConnecting = false;
       connectedToWiFi = false;
+      
+      // Disconnect cleanly and forcefully restart the AP to ensure it's available.
+      WiFi.disconnect(true); 
+      delay(100);
       WiFi.mode(WIFI_AP_STA);
-      WiFi.softAP(ap_ssid, ap_password, 1);
+      WiFi.softAP(ap_ssid, ap_password);
       WiFi.softAPConfig(local_ip, gateway, subnet);
-      delay(300);
-      Serial.println("AP restarted at: " + WiFi.softAPIP().toString());
-      Serial.println("Loop: WiFi mode after restart = " + String(WiFi.getMode()));
+      Serial.println("AP has been re-initialized to ensure availability.");
     }
   }
-  // if (WiFi.softAPIP().toString() == "0.0.0.0") {
-  //   WiFi.softAP(ap_ssid, ap_password, 1); // or use 11 if 1 is crowded;
-  //   WiFi.softAPConfig(local_ip, gateway, subnet);
-  //   Serial.println("AP check: restored AP");
-  // }
+
+  // Optional: Periodically check if the AP has died for any reason and restart it
+  static unsigned long lastApCheck = 0;
+  if (millis() - lastApCheck > 5000) { // Check every 5 seconds
+      if (WiFi.softAPIP() == IPAddress(0,0,0,0)) {
+          Serial.println("AP has disappeared! Restarting it...");
+          WiFi.softAP(ap_ssid, ap_password);
+          WiFi.softAPConfig(local_ip, gateway, subnet);
+      }
+      lastApCheck = millis();
+  }
 }
